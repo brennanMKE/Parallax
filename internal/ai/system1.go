@@ -314,6 +314,8 @@ func (s *System1) Orders(v rules.View) []Order {
 	ans, err := s.Model.Ask(ctx, sit.Prompt())
 	release()
 	switch {
+	case errors.Is(err, ErrNoSlot):
+		return fallback(func(s *Stats) *atomic.Int64 { return &s.Queued })
 	case errors.Is(err, ErrBusy):
 		// Load, not an outage: the model stays up.
 		return fallback(func(s *Stats) *atomic.Int64 { return &s.Busy })

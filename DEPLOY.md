@@ -74,15 +74,29 @@ The rule-based computer players need nothing extra. The System 1 players ask a s
 `-system1 http://127.0.0.1:8799/predict` to the server's flags, with the shared key in `PARALLAX_SYSTEM1_KEY`. If the
 model is unreachable, those players play by the rules instead.
 
-Load limits, so one server can't swamp the model:
+To spread the load over several model servers, list them, fastest first:
 
-- `-system1-concurrency 2`: the most model requests in flight at once, across every game.
+```sh
+-system1 http://fast.example.com/predict,http://second.example.com/predict,https://slow.example.com/predict
+-system1-concurrency 2,2,1
+```
+
+Each request goes to the first healthy server with a free slot, so the fastest takes the load and the others take the
+overflow. A request that fails or gets a 503 is tried once more on another server within the same turn's deadline, and
+a server that fails is skipped until its `/health` answers again. `PARALLAX_SYSTEM1_KEY` (or `-system1-key`) holds one
+key for all of them, or a comma-separated list with one key per server, in the same order.
+
+Load limits, so one server can't swamp a model:
+
+- `-system1-concurrency 2`: the most requests in flight at once to each model server, across every game: one number for
+  all, or one per server. A model works on one batch at a time, so more than 1 or 2 only queues.
 - `-system1-wait 2s`: how long a turn waits for a free slot before playing Planner.
 - `-system1-games 10`: the most games at once with System 1 players. Past it, lobbies stop offering them and games
   with them can't start until one finishes.
 
 Every five minutes, while the numbers change, the server logs a "System 1 use" line: decisions asked and answered,
-fallbacks by reason, requests in flight and games using it.
+fallbacks by reason, requests in flight and games using it. With several model servers, it adds a "System 1 endpoint"
+line for each, numbered in the order given: up or down, answered, failed and in flight.
 
 ## Link previews and images
 

@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"parallax/internal/ai"
 )
 
 // modelHealth tracks whether the System 1 model answers. While it's down,
@@ -15,6 +19,7 @@ import (
 // logged once each way.
 type modelHealth struct {
 	log    *slog.Logger
+	name   string // the endpoint's place in the pool, for logs
 	url    string
 	key    string
 	every  time.Duration
@@ -28,7 +33,7 @@ type modelHealth struct {
 }
 
 func newModelHealth(log *slog.Logger, url, key string) *modelHealth {
-	return &modelHealth{log: log, url: url, key: key, every: 15 * time.Second,
+	return &modelHealth{log: log, name: "1", url: url, key: key, every: 15 * time.Second,
 		client: &http.Client{Timeout: 5 * time.Second}}
 }
 
@@ -44,7 +49,7 @@ func (h *modelHealth) failed(err error) {
 	defer h.mu.Unlock()
 	if !h.down {
 		h.down = true
-		h.log.Warn("System 1 model unreachable; computer players use Planner until it's back", "url", h.url, "err", err)
+		h.log.Warn("System 1 model unreachable; skipped until it's back", "endpoint", h.name, "url", h.url, "err", err)
 		h.notify()
 	}
 }
@@ -60,7 +65,7 @@ func (h *modelHealth) answered() {
 	defer h.mu.Unlock()
 	if h.down {
 		h.down = false
-		h.log.Info("System 1 model is back", "url", h.url)
+		h.log.Info("System 1 model is back", "endpoint", h.name, "url", h.url)
 		h.notify()
 	}
 }
@@ -69,7 +74,7 @@ func (h *modelHealth) answered() {
 // offers System 1 players only while the model answers.
 func (h *modelHealth) run() {
 	if h.Check(context.Background()) == nil {
-		h.log.Info("System 1 model is up; computer players use it by default", "url", h.url)
+		h.log.Info("System 1 model is up", "endpoint", h.name, "url", h.url)
 	}
 	for range time.Tick(h.every) {
 		h.Check(context.Background())
@@ -98,6 +103,64 @@ func (h *modelHealth) Check(ctx context.Context) error {
 	}
 	h.answered()
 	return nil
+}
+
+// newModelPool makes the System 1 pool from the flags: endpoints most
+// preferred first, and keys and slots either one for all or one per
+// endpoint.
+func newModelPool(log *slog.Logger, urls, keys, slots []string, batch bool, wait time.Duration) (*ai.Pool, error) {
+	pick := func(what string, list []string, i int) (string, error) {
+		switch len(list) {
+		case 0:
+			return "", nil
+		case 1:
+			return list[0], nil
+		case len(urls):
+			return list[i], nil
+		}
+		return "", fmt.Errorf("%d %s for %d endpoints: give one, or one per endpoint", len(list), what, len(urls))
+	}
+	var eps []*ai.Endpoint
+	for i, url := range urls {
+		key, err := pick("keys", keys, i)
+		if err != nil {
+			return nil, err
+		}
+		n, err := pick("concurrency values", slots, i)
+		if err != nil {
+			return nil, err
+		}
+		limit := 2
+		if n != "" {
+			if limit, err = strconv.Atoi(n); err != nil || limit < 1 {
+				return nil, fmt.Errorf("concurrency %q: want a whole number of at least 1", n)
+			}
+		}
+		h := newModelHealth(log, url, key)
+		h.name = strconv.Itoa(i + 1)
+		eps = append(eps, &ai.Endpoint{
+			Name:     h.name,
+			Model:    &ai.Client{URL: url, APIKey: key, Batch: batch},
+			Health:   h,
+			OnError:  h.failed,
+			OnAnswer: h.answered,
+			Slots:    limit,
+		})
+	}
+	if len(eps) == 0 {
+		return nil, fmt.Errorf("no endpoints")
+	}
+	return ai.NewPool(wait, eps...), nil
+}
+
+// runModelHealth starts each endpoint's health checks; changed runs when
+// any of them goes down or comes back.
+func runModelHealth(pool *ai.Pool, changed func()) {
+	for _, e := range pool.Endpoints() {
+		h := e.Health.(*modelHealth)
+		h.changed = changed
+		go h.run()
+	}
 }
 
 type statusError struct{ status string }

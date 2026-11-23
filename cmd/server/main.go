@@ -22,11 +22,11 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dev := flag.Bool("dev", false, "development mode: accept WebSockets from any origin, debug logs")
-	s1URL := flag.String("system1", "", `System 1 decision endpoint for computer players, e.g. http://127.0.0.1:8799/predict (off when empty). When set, System 1 is the default computer; while it's unreachable those players play as Planner`)
-	s1Key := flag.String("system1-key", os.Getenv("PARALLAX_SYSTEM1_KEY"), "API key for the System 1 endpoint, sent as a Bearer token (default $PARALLAX_SYSTEM1_KEY, which keeps it out of the process list)")
+	s1URL := flag.String("system1", "", `System 1 decision endpoint for computer players, e.g. http://127.0.0.1:8799/predict (off when empty), or several, comma-separated, most preferred first: each request goes to the first healthy one with a free slot, and a failed request is tried once on another. When set, System 1 is the default computer; while none is reachable those players play as Planner`)
+	s1Key := flag.String("system1-key", os.Getenv("PARALLAX_SYSTEM1_KEY"), "API key for the System 1 endpoints, sent as a Bearer token: one for all, or comma-separated, one per endpoint (default $PARALLAX_SYSTEM1_KEY, which keeps it out of the process list)")
 	s1Batch := flag.Bool("system1-batch", true, "send several states per request; off sends one request per state")
 	s1Timeout := flag.Duration("system1-timeout", 15*time.Second, "longest wait for one System 1 decision before playing Planner that turn")
-	s1Concurrency := flag.Int("system1-concurrency", 2, "most System 1 requests in flight at once, across every game")
+	s1Concurrency := flag.String("system1-concurrency", "2", "most System 1 requests in flight at once, across every game: one number for each endpoint, or comma-separated, one per endpoint")
 	s1Wait := flag.Duration("system1-wait", 2*time.Second, "longest wait for a free request slot before playing Planner that turn")
 	s1Games := flag.Int("system1-games", 10, "most games at once with System 1 players (0 = no limit); past it, new games can't use System 1")
 	publicURL := flag.String("public-url", os.Getenv("PARALLAX_PUBLIC_URL"), `the site's address as players reach it, e.g. https://game.example.com, for link previews (default $PARALLAX_PUBLIC_URL, else worked out from each request)`)
@@ -42,32 +42,31 @@ func main() {
 
 	players := map[string]ai.Player{proto.AIPlanner: ai.Planner{}, proto.AIGreedy: ai.Greedy{}}
 	defaultAI := proto.AIPlanner
-	var health *modelHealth
+	var pool *ai.Pool
 	var s1Stats *ai.Stats
-	var s1Gate *ai.Gate
 	if *s1URL != "" && *s1URL != "off" {
-		s1Stats, s1Gate = &ai.Stats{}, ai.NewGate(*s1Concurrency, *s1Wait)
-		model := &ai.Client{URL: *s1URL, APIKey: *s1Key, Batch: *s1Batch}
-		health = newModelHealth(log, *s1URL, *s1Key)
+		var err error
+		pool, err = newModelPool(log, splitList(*s1URL), splitList(*s1Key), splitList(*s1Concurrency), *s1Batch, *s1Wait)
+		if err != nil {
+			log.Error("System 1 flags", "err", err)
+			os.Exit(2)
+		}
+		s1Stats = &ai.Stats{}
 		players[proto.AISystem1] = &ai.System1{
-			Model:    model,
+			Model:    pool,
 			Fallback: ai.Planner{},
 			Timeout:  *s1Timeout,
-			Health:   health,
-			Gate:     s1Gate,
+			Health:   pool,
 			Stats:    s1Stats,
-			OnError:  health.failed,
-			OnAnswer: health.answered,
 		}
 		defaultAI = proto.AISystem1
 	}
 
 	handler := server.New(server.Options{Dev: *dev, Origins: splitList(*origins), Static: static(), PublicURL: *publicURL, Logger: log, Room: room.Options{AI: players, DefaultAI: defaultAI, ModelGames: *s1Games}})
-	if health != nil {
-		// Lobbies show System 1 only while the model answers.
-		health.changed = handler.Rooms().RefreshLobbies
-		go health.run()
-		go logModelUse(log, s1Stats, s1Gate, handler.Rooms())
+	if pool != nil {
+		// Lobbies show System 1 only while a model answers.
+		runModelHealth(pool, handler.Rooms().RefreshLobbies)
+		go logModelUse(log, s1Stats, pool, handler.Rooms())
 	}
 	if *stateDir != "" {
 		if n := handler.Rooms().RestoreAll(*stateDir); n > 0 {
@@ -126,7 +125,7 @@ func main() {
 
 // logModelUse logs System 1 use every five minutes when it has changed:
 // decisions asked and answered, fallbacks by reason, and games using it.
-func logModelUse(log *slog.Logger, stats *ai.Stats, gate *ai.Gate, rooms *room.Manager) {
+func logModelUse(log *slog.Logger, stats *ai.Stats, pool *ai.Pool, rooms *room.Manager) {
 	var last ai.StatsSnapshot
 	for range time.Tick(5 * time.Minute) {
 		s := stats.Snapshot()
@@ -137,7 +136,12 @@ func logModelUse(log *slog.Logger, stats *ai.Stats, gate *ai.Gate, rooms *room.M
 		games, limit := rooms.ModelGames()
 		log.Info("System 1 use", "asked", s.Asked, "answered", s.Answered, "fallbacks", s.Fallbacks(),
 			"down", s.Down, "no_slot", s.Queued, "busy", s.Busy, "timeout", s.Timeout, "failed", s.Failed,
-			"in_flight", gate.InFlight(), "games", games, "game_limit", limit)
+			"in_flight", pool.InFlight(), "games", games, "game_limit", limit)
+		if eps := pool.Stats(); len(eps) > 1 {
+			for _, e := range eps {
+				log.Info("System 1 endpoint", "endpoint", e.Name, "up", e.Up, "answered", e.Answered, "failed", e.Failed, "in_flight", e.InFlight)
+			}
+		}
 	}
 }
 
