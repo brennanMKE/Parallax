@@ -81,3 +81,28 @@ The script replaces only the binary. Never touch any of these from this repo:
 
 Brennan's own hosts have their configuration in separate ops repos, each looked after by its own agent session. Changes
 to any of the above go there. If a build needs a new flag in a unit, add it there before the deploy.
+
+## Batty
+
+This applies only when `BATTY_SESSION_ID`, `BATTY_PANE_ID` and `BATTY_TAB_ID` are set: the terminal is a Pane of
+Batty, a macOS terminal multiplexer. Drive it with the `batty` CLI through the shell. Run `batty capabilities` before
+using a verb, and `batty <verb> --help` for its flags. Build 1.4.x has no `mcp`, `server` or `agent` verbs; don't
+assume them.
+
+- Run long-running or interactive commands (dev servers, watchers, anything that needs Brennan's input) in a visible
+  Pane: `batty pane split --command '...'`. Don't background them out of sight.
+- Status views: `batty pane split --view git-status --path . --unique` (also `process-status`, `system-metrics`).
+  `--unique` reuses an open Pane of that kind.
+- When a long task finishes or needs attention: `batty notify --title '...' --body '...'`.
+- Follow-ups: `batty session remind '...' --in 1h` (or `--at HH:MM`, `--tomorrow`).
+- State: `batty list` (sessions, panes or tabs), `batty status`, and `batty id` for your own ids. `batty session info`
+  without `--session` describes the focused session, not yours, so pass `--session "$BATTY_SESSION_ID"`.
+- Close only the Panes and Sessions you created, always with `--pane <id>` or `--session <id>`. Without an id, close
+  falls back to your own Pane or Session.
+
+1.4.x workarounds, to drop when 1.5.0 ships:
+
+- A `--command` Pane doesn't get your PATH, only `/usr/bin:/bin:/usr/sbin:/sbin` and Batty's bin, so Homebrew and
+  `~/go/bin` are missing. Use absolute paths or `export PATH=...` in the command.
+- To learn the exit status, have the command write `$?` to a file, e.g. in your scratchpad directory.
+- A `--command` Pane stays open after its command exits until a key is pressed.
