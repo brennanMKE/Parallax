@@ -13,7 +13,8 @@ the same prompt; only misses reach the model. --cache-size 0 (or
 SYSTEM1_LAYA_CACHE=0) turns the cache off.
 
 --key (or SYSTEM1_LAYA_KEY) requires "Authorization: Bearer <key>" on
-/predict and /stats; /health stays open for monitoring.
+/predict and /stats; /health stays open for monitoring. It takes a comma-separated
+list, so each client can have its own key.
 
 The model answers one request at a time. --max-queue (or
 SYSTEM1_LAYA_MAX_QUEUE, default 4) bounds how many may wait for it; past that
@@ -49,13 +50,17 @@ def main():
     p.add_argument("--cache-size", type=int, help="answers to cache, 0 = off (default: $SYSTEM1_LAYA_CACHE or 10000)")
     p.add_argument("--stats-every", type=float, default=0, help="print cache stats every N seconds (0 = never)")
     p.add_argument("--max-queue", type=int, help="requests that may wait for the model; more get 503 busy (default: $SYSTEM1_LAYA_MAX_QUEUE or 4)")
-    p.add_argument("--key", help="require this Bearer token on /predict and /stats (default: $SYSTEM1_LAYA_KEY, else none)")
+    p.add_argument("--key", help="require one of these comma-separated Bearer tokens on /predict and /stats (default: $SYSTEM1_LAYA_KEY, else none)")
     args = p.parse_args()
-    key = args.key or os.environ.get("SYSTEM1_LAYA_KEY", "").strip()
-    want = f"Bearer {key}".encode()
+    # Several keys, comma-separated, so each client can be given its own and revoked alone.
+    keys = [k.strip() for k in (args.key or os.environ.get("SYSTEM1_LAYA_KEY", "")).split(",") if k.strip()]
+    key = bool(keys)
+    wants = [f"Bearer {k}".encode() for k in keys]
 
     def authorized(headers):
-        return not key or hmac.compare_digest(headers.get("Authorization", "").encode(), want)
+        got = headers.get("Authorization", "").encode()
+        # Compare against every key, so timing doesn't reveal which one matched.
+        return not keys or sum(hmac.compare_digest(got, w) for w in wants) > 0
 
     from laya_batch import AnswerCache, answer_cached, cache_size_from_env, load_model, predict_many
 

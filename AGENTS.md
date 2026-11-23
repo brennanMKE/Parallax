@@ -94,11 +94,11 @@ assume them.
 - Status views: `batty pane split --view git-status --path . --unique` (also `process-status`, `system-metrics`).
   `--unique` reuses an open Pane of that kind.
 - When a long task finishes or needs attention: `batty notify --title '...' --body '...'`.
-- Follow-ups: `batty session remind '...' --in 1h` (or `--at HH:MM`, `--tomorrow`).
-- State: `batty list` (sessions, panes or tabs), `batty status`, and `batty id` for your own ids. `batty session info`
-  without `--session` describes the focused session, not yours, so pass `--session "$BATTY_SESSION_ID"`.
-- Close only the Panes and Sessions you created, always with `--pane <id>` or `--session <id>`. Without an id, close
-  falls back to your own Pane or Session.
+- Follow-ups: `batty session remind '...' --session "$BATTY_SESSION_ID" --in 1h` (or `--at HH:MM`, `--tomorrow`).
+- State: `batty list` (sessions, panes or tabs), `batty status`, `batty session info --session "$BATTY_SESSION_ID"`,
+  and `batty id` for your own ids.
+- Always pass `--session <id>` to `session info`, `remind` and `close`, and `--pane <id>` to `pane close`. Close only
+  the Panes and Sessions you created: without an id, close falls back to your own Pane or Session.
 
 1.4.x workarounds, to drop when 1.5.0 ships:
 

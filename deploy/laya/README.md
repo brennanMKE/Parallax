@@ -21,7 +21,8 @@ Then start Parallax with `-system1 http://127.0.0.1:8799/predict`.
 - Flags: `--host` (default 127.0.0.1), `--port`, `--device` (cpu, cuda, mps;
   default auto), `--cache-size` (answers to cache, default 10000).
 - `--key` or `SYSTEM1_LAYA_KEY` requires `Authorization: Bearer <key>` on
-  /predict and /stats (/health stays open). Give Parallax the same key in
+  /predict and /stats (/health stays open). It accepts a comma-separated
+  list, so each client gets its own key and can be revoked alone. Give Parallax the same key in
   `PARALLAX_SYSTEM1_KEY` (or `-system1-key`); keep both in root-only
   environment files rather than on the command line.
 - `--max-queue` (or `SYSTEM1_LAYA_MAX_QUEUE`, default 4) bounds how many
